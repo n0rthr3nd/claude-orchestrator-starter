@@ -1,0 +1,227 @@
+name: Full Project Bootstrap
+description: >
+  Complete project scaffolding workflow. Takes a project description and
+  produces a fully designed, implemented, tested, documented codebase.
+  Appropriate for greenfield projects or major module rewrites.
+
+version: "1.0"
+trigger:
+  command: /orchestrate
+  task_types: [bootstrap]
+
+config:
+  default_model: claude-sonnet-4-6
+  orchestrator_model: claude-opus-4-6
+  max_parallel_agents: 4
+  checkpoint_on_gate: true
+  debate_on_architecture: true  # Enable debate protocol for arch decisions
+
+stages:
+  - id: discovery
+    name: Requirements Analysis
+    agents:
+      - id: architect-discovery
+        type: architect
+        model: claude-opus-4-6  # Use Opus for this critical phase
+        max_turns: 25
+        token_budget: 80000
+        task: >
+          Analyze the project requirements. Define:
+          1. System boundaries and components
+          2. Technology stack decisions (with ADRs)
+          3. Data models and relationships
+          4. API contracts (OpenAPI)
+          5. Non-functional requirements
+          6. Deployment architecture
+        outputs:
+          - system_design_doc
+          - technology_adrs
+          - data_model
+          - api_spec
+          - nfr_doc
+
+  - id: architecture_debate
+    name: Architecture Debate (if enabled)
+    depends_on: [discovery]
+    condition: "config.debate_on_architecture == true"
+    action: debate_protocol
+    topic: "Is the proposed architecture the best approach?"
+    agents:
+      pro: architect  # Argues FOR the proposal
+      con: architect  # Argues against, proposes alternative
+      judge: architect  # Makes final decision
+    output: architecture_decision
+
+  - id: scaffold
+    name: Project Scaffolding
+    depends_on: [discovery, architecture_debate]
+    parallel: true
+    agents:
+      - id: developer-scaffold
+        type: developer
+        model: claude-sonnet-4-6
+        max_turns: 30
+        token_budget: 80000
+        task: >
+          Create project structure: package.json, tsconfig, .eslintrc,
+          directory layout, base classes, interfaces, DI container setup.
+        outputs:
+          - project_structure
+          - base_configs
+          - core_interfaces
+
+      - id: documenter-scaffold
+        type: documenter
+        model: claude-sonnet-4-6
+        max_turns: 15
+        token_budget: 30000
+        task: >
+          Create initial documentation: README, CONTRIBUTING,
+          architecture diagrams, env variable documentation.
+        outputs:
+          - readme
+          - contributing_guide
+          - env_doc
+
+    quality_gates:
+      - static_analysis
+
+  - id: core_implementation
+    name: Core Domain Implementation
+    depends_on: [scaffold]
+    agents:
+      - id: developer-core
+        type: developer
+        model: claude-sonnet-4-6
+        max_turns: 40
+        token_budget: 100000
+        task: >
+          Implement the core domain logic per the API spec and data model.
+          Include: repositories, services, domain entities, use cases.
+        inputs:
+          - api_spec
+          - data_model
+          - core_interfaces
+        outputs:
+          - domain_implementation
+    quality_gates:
+      - static_analysis
+
+  - id: api_implementation
+    name: API Layer Implementation
+    depends_on: [core_implementation]
+    agents:
+      - id: developer-api
+        type: developer
+        model: claude-sonnet-4-6
+        max_turns: 30
+        token_budget: 70000
+        task: >
+          Implement API layer: routes, controllers, middleware, request/
+          response serialization per the OpenAPI spec.
+        inputs:
+          - api_spec
+          - domain_implementation
+        outputs:
+          - api_implementation
+    quality_gates:
+      - static_analysis
+
+  - id: testing
+    name: Comprehensive Testing
+    depends_on: [api_implementation]
+    parallel: true
+    agents:
+      - id: tester-unit
+        type: tester
+        model: claude-sonnet-4-6
+        max_turns: 30
+        token_budget: 70000
+        coverage_target: 85
+        task: >
+          Write unit tests for domain logic and services.
+          Target 85% coverage. Mock all external dependencies.
+        outputs:
+          - unit_tests
+
+      - id: tester-integration
+        type: tester
+        model: claude-sonnet-4-6
+        max_turns: 25
+        token_budget: 60000
+        task: >
+          Write integration tests for all API endpoints.
+          Use test database. Test happy path + error scenarios.
+        outputs:
+          - integration_tests
+    quality_gates:
+      - tests
+
+  - id: security_audit
+    name: Security Audit
+    depends_on: [testing]
+    agents:
+      - id: security-full-audit
+        type: security
+        model: claude-sonnet-4-6
+        max_turns: 20
+        token_budget: 50000
+        task: >
+          Complete OWASP Top 10 security audit of the entire codebase.
+          Dependency vulnerability scan. Secrets detection.
+        outputs:
+          - security_report
+    quality_gates:
+      - security
+
+  - id: final_review
+    name: Final Code Review
+    depends_on: [security_audit]
+    agents:
+      - id: reviewer-final
+        type: reviewer
+        model: claude-sonnet-4-6
+        max_turns: 20
+        token_budget: 60000
+        task: >
+          Complete review of the entire codebase for production readiness.
+          Verify architectural decisions are correctly implemented.
+        outputs:
+          - final_review_report
+    quality_gates:
+      - code_review
+    on_gate_failure:
+      action: send_to_developer
+      max_retries: 2
+
+  - id: documentation_finalize
+    name: Finalize Documentation
+    depends_on: [final_review]
+    agents:
+      - id: documenter-final
+        type: documenter
+        model: claude-sonnet-4-6
+        max_turns: 20
+        token_budget: 40000
+        task: >
+          Complete all documentation: API reference (from OpenAPI spec),
+          deployment guide, runbook, troubleshooting guide, CHANGELOG.
+        outputs:
+          - complete_documentation
+    quality_gates:
+      - documentation
+
+synthesis:
+  depends_on: [documentation_finalize]
+  action: create_checkpoint
+  label: "bootstrap-complete"
+  git_commit: true
+  git_tag: "v0.1.0"
+  commit_message: "feat: initial project bootstrap"
+
+success_criteria:
+  - all_quality_gates_passed: true
+  - test_coverage_above: 80
+  - zero_security_critical: true
+  - zero_security_high: true
+  - all_endpoints_documented: true

@@ -1,0 +1,79 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node:*)",
+      "Bash(npm:*)",
+      "Bash(git:*)",
+      "Bash(cat:*)",
+      "Bash(ls:*)",
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+      "Bash(find:*)"
+    ],
+    "deny": [
+      "Bash(rm -rf /*)",
+      "Bash(curl * | bash)",
+      "Bash(wget * | sh)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node hooks/pre-tool-use/validate.js"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node hooks/post-tool-use/quality-check.js"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node hooks/notification/progress.js"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node hooks/post-tool-use/auto-checkpoint.js"
+          }
+        ]
+      }
+    ]
+  },
+  "env": {
+    "ORCHESTRATOR_VERSION": "1.0.0",
+    "LOG_LEVEL": "info",
+    "CHECKPOINT_DIR": ".orchestrator/checkpoints",
+    "CACHE_DIR": ".orchestrator/cache",
+    "MAX_AGENT_TURNS": "30",
+    "DEFAULT_SUB_AGENT_MODEL": "claude-sonnet-4-6",
+    "ORCHESTRATOR_MODEL": "claude-opus-4-6",
+    "CONFIDENCE_THRESHOLD": "80",
+    "MAX_RETRIES": "2"
+  },
+  "model": "claude-opus-4-6",
+  "includeCoAuthoredBy": true
+}

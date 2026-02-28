@@ -1,0 +1,148 @@
+name: Bug Fix
+description: >
+  Structured workflow for investigating, fixing, and verifying bugs.
+  Enforces test-first approach: write a failing test BEFORE implementing the fix.
+
+version: "1.0"
+trigger:
+  command: /orchestrate
+  task_types: [bug_fix]
+
+config:
+  default_model: claude-sonnet-4-6
+  max_parallel_agents: 2
+  checkpoint_on_gate: true
+
+stages:
+  - id: reproduce
+    name: Reproduce Bug with Failing Test
+    agents:
+      - id: tester-reproduce
+        type: tester
+        model: claude-sonnet-4-6
+        max_turns: 15
+        token_budget: 40000
+        task: >
+          Write a failing test that EXACTLY reproduces the reported bug.
+          The test must fail before any fix is applied.
+          Document reproduction steps.
+        inputs:
+          - bug_description
+          - reproduction_steps
+          - affected_code
+        outputs:
+          - failing_test
+          - reproduction_confirmed
+    quality_gates: []  # Test should fail here — that's expected
+    verification:
+      - failing_test_exists: true
+      - test_actually_fails: true  # Must verify test fails
+
+  - id: fix
+    name: Implement Fix
+    depends_on: [reproduce]
+    agents:
+      - id: developer-fix
+        type: developer
+        model: claude-sonnet-4-6
+        max_turns: 25
+        token_budget: 60000
+        task: >
+          Fix the root cause of the bug (not just the symptom).
+          The failing test from the reproduce stage must pass after your fix.
+          Produce a root cause analysis document.
+        inputs:
+          - failing_test
+          - affected_code
+          - bug_description
+        outputs:
+          - fix_implementation
+          - root_cause_analysis
+    quality_gates:
+      - static_analysis
+    verification:
+      - failing_test_now_passes: true
+
+  - id: verify
+    name: Full Test Suite Verification
+    depends_on: [fix]
+    agents:
+      - id: tester-verify
+        type: tester
+        model: claude-sonnet-4-6
+        max_turns: 20
+        token_budget: 50000
+        task: >
+          Run the full test suite. Verify the fix doesn't break existing tests.
+          Check for regression risks in related code.
+        inputs:
+          - fix_implementation
+          - failing_test
+        outputs:
+          - test_results
+          - regression_analysis
+    quality_gates:
+      - tests
+    on_gate_failure:
+      action: send_to_developer
+      max_retries: 2
+      then: escalate
+
+  - id: security_check
+    name: Security Check (conditional)
+    depends_on: [verify]
+    condition: "bug.type == 'security' || fix.touches_auth_code"
+    agents:
+      - id: security-fix-audit
+        type: security
+        model: claude-sonnet-4-6
+        max_turns: 15
+        token_budget: 40000
+        task: >
+          Verify the fix doesn't introduce new security vulnerabilities.
+          If bug was security-related, verify the CVE is fully resolved.
+        inputs:
+          - fix_implementation
+          - bug_description
+        outputs:
+          - security_clearance
+    quality_gates:
+      - security
+
+  - id: review
+    name: Fix Review
+    depends_on: [verify]
+    agents:
+      - id: reviewer-fix
+        type: reviewer
+        model: claude-sonnet-4-6
+        max_turns: 12
+        token_budget: 35000
+        task: >
+          Review the bug fix for correctness, side effects, and completeness.
+          Verify root cause analysis is accurate.
+        inputs:
+          - fix_implementation
+          - root_cause_analysis
+          - test_results
+        outputs:
+          - review_report
+    quality_gates:
+      - code_review
+    on_gate_failure:
+      action: send_to_developer
+      max_retries: 1
+      then: escalate
+
+synthesis:
+  depends_on: [review]
+  action: create_checkpoint
+  label: "bugfix-complete"
+  git_commit: true
+  commit_message_template: "fix: {{bug_title}} (#{{issue_number}})"
+
+success_criteria:
+  - failing_test_reproduced: true
+  - failing_test_now_passes: true
+  - full_suite_passes: true
+  - no_regressions: true

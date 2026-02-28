@@ -1,0 +1,72 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://orchestrator/schemas/task-definition.json",
+  "title": "TaskDefinition",
+  "description": "Defines a unit of work in the orchestration pipeline",
+  "type": "object",
+  "required": ["id", "type", "description", "assigned_agent"],
+  "properties": {
+    "id": { "type": "string", "format": "uuid" },
+    "type": {
+      "type": "string",
+      "enum": ["feature", "bug_fix", "refactor", "security_fix", "documentation", "infrastructure", "review"]
+    },
+    "description": { "type": "string", "minLength": 10 },
+    "assigned_agent": {
+      "type": "string",
+      "enum": ["architect", "developer", "reviewer", "tester", "security", "documenter"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "in_progress", "blocked", "completed", "failed"],
+      "default": "pending"
+    },
+    "priority": {
+      "type": "string",
+      "enum": ["critical", "high", "medium", "low"],
+      "default": "medium"
+    },
+    "complexity": {
+      "type": "string",
+      "enum": ["XS", "S", "M", "L", "XL"]
+    },
+    "depends_on": {
+      "type": "array",
+      "items": { "type": "string", "format": "uuid" },
+      "description": "Task IDs that must complete before this task can start"
+    },
+    "can_parallelize_with": {
+      "type": "array",
+      "items": { "type": "string", "format": "uuid" },
+      "description": "Task IDs that can run concurrently with this task"
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "token_budget": {
+      "type": "integer",
+      "description": "Maximum tokens this task's agent may consume",
+      "minimum": 1000,
+      "maximum": 200000
+    },
+    "max_turns": {
+      "type": "integer",
+      "description": "Maximum agent turns allowed",
+      "minimum": 1,
+      "maximum": 50
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "started_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": "string", "format": "date-time" },
+    "result": {
+      "type": "object",
+      "properties": {
+        "confidence_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "artifacts": { "type": "array" },
+        "quality_gates_passed": { "type": "array" }
+      }
+    }
+  }
+}

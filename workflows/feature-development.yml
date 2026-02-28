@@ -1,0 +1,196 @@
+name: Feature Development
+description: >
+  Full lifecycle workflow for implementing new features.
+  Covers design → implementation → testing → security → review → documentation.
+
+version: "1.0"
+trigger:
+  command: /orchestrate
+  task_types: [feature]
+
+# Configuration
+config:
+  default_model: claude-sonnet-4-6
+  orchestrator_model: claude-opus-4-6
+  max_parallel_agents: 3
+  checkpoint_on_gate: true
+  auto_rollback_on_critical_failure: true
+
+# Agent defaults
+agent_defaults:
+  retry_on_failure: 2
+  confidence_threshold: 80
+  timeout_minutes: 30
+
+# Workflow stages
+stages:
+  - id: design
+    name: Architecture & Design
+    agents:
+      - id: architect-main
+        type: architect
+        model: claude-sonnet-4-6
+        max_turns: 20
+        token_budget: 50000
+        task: >
+          Design the system architecture for this feature.
+          Produce: OpenAPI spec, ADR, data model, interface contracts.
+        inputs:
+          - task_description
+          - existing_codebase_summary
+          - constraints
+        outputs:
+          - openapi_spec
+          - adr
+          - data_model
+          - interface_contracts
+    quality_gates:
+      - static_analysis
+    on_gate_failure:
+      action: retry
+      max_retries: 2
+      then: escalate
+
+  - id: implementation
+    name: Implementation
+    depends_on: [design]
+    agents:
+      - id: developer-main
+        type: developer
+        model: claude-sonnet-4-6
+        max_turns: 30
+        token_budget: 80000
+        task: >
+          Implement the feature per the architectural spec.
+          Follow all coding standards in CLAUDE.md.
+        inputs:
+          - openapi_spec
+          - adr
+          - data_model
+        outputs:
+          - source_files
+          - migrations
+    quality_gates:
+      - static_analysis
+    on_gate_failure:
+      action: retry
+      max_retries: 2
+      then: escalate
+
+  - id: testing
+    name: Test Coverage
+    depends_on: [implementation]
+    agents:
+      - id: tester-main
+        type: tester
+        model: claude-sonnet-4-6
+        max_turns: 25
+        token_budget: 60000
+        coverage_target: 85
+        task: >
+          Write comprehensive tests for all implemented code.
+          Target 85% coverage. Cover all error paths.
+        inputs:
+          - source_files
+          - openapi_spec
+        outputs:
+          - test_files
+          - coverage_report
+    quality_gates:
+      - tests
+    on_gate_failure:
+      action: retry
+      max_retries: 2
+      then: escalate
+
+  - id: security_and_review
+    name: Security Audit & Code Review
+    depends_on: [testing]
+    parallel: true  # security and review run concurrently
+    agents:
+      - id: security-audit
+        type: security
+        model: claude-sonnet-4-6
+        max_turns: 15
+        token_budget: 40000
+        task: >
+          Perform OWASP Top 10 security audit of the implementation.
+          Check for secrets, injection vulnerabilities, auth issues.
+        inputs:
+          - source_files
+          - test_files
+        outputs:
+          - security_report
+
+      - id: code-reviewer
+        type: reviewer
+        model: claude-sonnet-4-6
+        max_turns: 15
+        token_budget: 40000
+        task: >
+          Review code for quality, correctness, and spec compliance.
+          Compare implementation against OpenAPI spec.
+        inputs:
+          - source_files
+          - openapi_spec
+          - test_files
+        outputs:
+          - review_report
+    quality_gates:
+      - security
+      - code_review
+    on_gate_failure:
+      action: send_to_developer
+      max_retries: 2
+      then: escalate
+
+  - id: documentation
+    name: Documentation
+    depends_on: [security_and_review]
+    agents:
+      - id: documenter-main
+        type: documenter
+        model: claude-sonnet-4-6
+        max_turns: 15
+        token_budget: 30000
+        task: >
+          Update all documentation: README, JSDoc, changelog.
+          Generate OpenAPI HTML docs.
+        inputs:
+          - source_files
+          - openapi_spec
+          - adr
+          - review_report
+        outputs:
+          - updated_readme
+          - jsdoc_comments
+          - changelog_entry
+    quality_gates:
+      - documentation
+    on_gate_failure:
+      action: retry
+      max_retries: 1
+      then: escalate
+
+# Fan-in: synthesize all results
+synthesis:
+  depends_on: [documentation]
+  action: create_checkpoint
+  label: "feature-complete"
+  git_commit: true
+  commit_message_template: "feat: {{feature_name}}"
+
+# Rollback procedure
+rollback:
+  trigger: critical_failure | manual
+  steps:
+    - restore_checkpoint: pre-feature
+    - notify_orchestrator: true
+    - log_failure_reason: true
+
+# Success criteria
+success_criteria:
+  - all_quality_gates_passed: true
+  - no_critical_findings: true
+  - coverage_above: 80
+  - confidence_above: 75

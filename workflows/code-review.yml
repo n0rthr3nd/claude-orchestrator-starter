@@ -1,0 +1,106 @@
+name: Code Review
+description: >
+  Multi-agent code review pipeline. Combines code quality review,
+  security audit, test coverage analysis, and documentation check.
+
+version: "1.0"
+trigger:
+  command: /review
+  task_types: [review]
+
+config:
+  default_model: claude-sonnet-4-6
+  max_parallel_agents: 3
+  parallel_review: true  # reviewer + security + tester run in parallel
+
+stages:
+  - id: parallel_reviews
+    name: Parallel Review Execution
+    parallel: true
+    agents:
+      - id: code-reviewer
+        type: reviewer
+        model: claude-sonnet-4-6
+        max_turns: 15
+        token_budget: 50000
+        task: >
+          Perform comprehensive code quality review.
+          Check correctness, patterns, SOLID principles, error handling.
+        inputs:
+          - changed_files
+          - spec_artifacts
+        outputs:
+          - review_report
+
+      - id: security-reviewer
+        type: security
+        model: claude-sonnet-4-6
+        max_turns: 15
+        token_budget: 40000
+        task: >
+          Security audit of all changed code.
+          OWASP Top 10 check, secrets detection, dependency scan.
+        inputs:
+          - changed_files
+          - package_json
+        outputs:
+          - security_report
+
+      - id: coverage-analyst
+        type: tester
+        model: claude-sonnet-4-6
+        max_turns: 12
+        token_budget: 35000
+        task: >
+          Analyze test coverage of changed files.
+          Identify untested code paths and missing test scenarios.
+        inputs:
+          - changed_files
+          - existing_tests
+        outputs:
+          - coverage_gaps_report
+
+  - id: aggregate
+    name: Aggregate Verdicts
+    depends_on: [parallel_reviews]
+    action: aggregate_verdicts
+    rules:
+      block_on:
+        - reviewer.verdict == "block"
+        - security.verdict == "fail"
+        - security.critical_count > 0
+      request_changes_on:
+        - reviewer.verdict == "request_changes"
+        - security.high_count > 0
+        - coverage.coverage_pct < 70
+      approve_on:
+        - all_verdicts_approve: true
+        - no_critical_or_high_findings: true
+
+  - id: documentation_check
+    name: Documentation Completeness Check
+    depends_on: [aggregate]
+    condition: "aggregate.verdict != 'block'"
+    agents:
+      - id: doc-checker
+        type: documenter
+        model: claude-haiku-4-5
+        max_turns: 8
+        token_budget: 20000
+        task: >
+          Check documentation completeness for changed files.
+          Identify undocumented public APIs.
+        inputs:
+          - changed_files
+        outputs:
+          - doc_coverage_report
+
+# Output: aggregated review result
+output:
+  format: review_summary
+  include:
+    - aggregate_verdict
+    - severity_counts
+    - all_findings
+    - coverage_report
+    - doc_gaps
