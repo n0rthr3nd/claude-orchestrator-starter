@@ -18,10 +18,26 @@
     <span id="status-badge" class="idle">Idle</span>
   </header>
 
-  <!-- ── Left: Task input + agents ────────────────────────────── -->
+  <!-- ── Left: Project + Task input + agents ──────────────────── -->
   <aside class="panel" id="panel-left">
-    <div class="panel-title">New Task</div>
 
+    <!-- Project selector -->
+    <div class="panel-title">Project</div>
+    <div class="project-section">
+      <div class="project-row">
+        <select id="project-select">
+          <option value="">— no projects configured —</option>
+        </select>
+        <button class="btn-icon" id="btn-edit-config" title="Edit config">✎</button>
+      </div>
+      <!-- Directory tree for active project -->
+      <div id="dir-tree" class="dir-tree">
+        <!-- populated by JS -->
+      </div>
+    </div>
+
+    <!-- Task input -->
+    <div class="panel-title">New Task</div>
     <div class="task-section">
       <textarea
         id="task-input"
@@ -74,6 +90,29 @@
       </div>
     </div>
   </aside>
+
+  <!-- ── Config modal ──────────────────────────────────────────── -->
+  <div id="config-modal" class="modal hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <span>Project Configuration</span>
+        <button class="modal-close" id="btn-close-modal">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-hint">
+          Edit <code>orchestrator.config.json</code> in the orchestrator root,
+          then click <b>Reload</b> to pick up changes.
+        </p>
+        <div id="config-editor-area">
+          <textarea id="config-editor" spellcheck="false"></textarea>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="btn-reload-config">↺ Reload</button>
+          <button class="btn btn-primary" id="btn-save-config">✔ Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
 </div>
 <script src="app.js"></script>

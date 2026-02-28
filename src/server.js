@@ -2,13 +2,14 @@
 /**
  * Web Dashboard Server — Express + SSE
  *
- * Expone el orquestador a través de una interfaz web con:
  * - POST /api/orchestrate  → lanza una tarea
  * - GET  /api/stream       → SSE: eventos en tiempo real
  * - GET  /api/checkpoints  → lista de checkpoints
  * - POST /api/checkpoint   → checkpoint manual
  * - POST /api/rollback     → rollback a un checkpoint
  * - GET  /api/status       → estado actual de la sesión
+ * - GET  /api/config       → configuración del orquestador
+ * - PUT  /api/config       → actualizar configuración
  */
 
 import 'dotenv/config';
@@ -16,6 +17,7 @@ import express from 'express';
 import { createServer } from 'http';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { Orchestrator } from './orchestrator.js';
 import { CheckpointManager } from './checkpoint-manager.js';
 import { createLogger } from './logger.js';
@@ -25,6 +27,36 @@ const logger = createLogger('server');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const CONFIG_PATH = join(__dirname, '..', 'orchestrator.config.json');
+const CONFIG_EXAMPLE_PATH = join(__dirname, '..', 'orchestrator.config.example.json');
+
+// ── Config management ─────────────────────────────────────────────────────────
+
+function loadConfig() {
+  const src = existsSync(CONFIG_PATH) ? CONFIG_PATH : CONFIG_EXAMPLE_PATH;
+  try {
+    return JSON.parse(readFileSync(src, 'utf8'));
+  } catch {
+    return {
+      projects: [],
+      activeProject: -1,
+      defaultModel: 'claude-sonnet-4-6',
+      orchestratorModel: 'claude-opus-4-6',
+      maxParallelAgents: 3,
+      confidenceThreshold: 80,
+    };
+  }
+}
+
+function saveConfig(cfg) {
+  writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf8');
+}
+
+function getActiveProject(cfg) {
+  if (!cfg.projects?.length) return null;
+  const idx = cfg.activeProject ?? 0;
+  return cfg.projects[idx] ?? cfg.projects[0] ?? null;
+}
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 app.use(express.json());
@@ -43,10 +75,11 @@ function broadcast(event) {
 // ── Session state ─────────────────────────────────────────────────────────────
 let currentOrchestrator = null;
 let sessionState = {
-  status: 'idle',          // idle | running | complete | error
+  status: 'idle',
   task: null,
-  agents: {},              // { architect: 'running'|'complete'|'fail'|'pending' }
-  gates: {                 // gate name → 'pending'|'pass'|'fail'
+  projectPath: null,
+  agents: {},
+  gates: {
     static_analysis: 'pending',
     tests: 'pending',
     security: 'pending',
@@ -54,7 +87,7 @@ let sessionState = {
     code_review: 'pending',
   },
   metrics: {},
-  logs: [],               // últimas 200 líneas
+  logs: [],
 };
 
 function pushLog(event) {
@@ -62,10 +95,12 @@ function pushLog(event) {
   if (sessionState.logs.length > 200) sessionState.logs.shift();
 }
 
-function resetSession(task) {
+function resetSession(task, projectPath, additionalPaths = []) {
   sessionState = {
     status: 'running',
     task,
+    projectPath,
+    additionalPaths,
     agents: {},
     gates: {
       static_analysis: 'pending',
@@ -81,7 +116,7 @@ function resetSession(task) {
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
-/** SSE stream — el frontend se conecta aquí para recibir eventos */
+/** SSE stream */
 app.get('/api/stream', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -89,13 +124,11 @@ app.get('/api/stream', (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.flushHeaders();
 
-  // Enviar estado actual al nuevo cliente
   res.write(`data: ${JSON.stringify({ type: 'sync', state: sessionState })}\n\n`);
 
   sseClients.add(res);
   logger.info({ clients: sseClients.size }, 'SSE client connected');
 
-  // Ping cada 25s para mantener la conexión viva
   const ping = setInterval(() => {
     try { res.write(': ping\n\n'); } catch { clearInterval(ping); }
   }, 25000);
@@ -107,7 +140,26 @@ app.get('/api/stream', (req, res) => {
   });
 });
 
-/** Lanzar una nueva tarea de orquestación */
+/** Leer configuración */
+app.get('/api/config', (_req, res) => {
+  const cfg = loadConfig();
+  res.json(cfg);
+});
+
+/** Actualizar configuración */
+app.put('/api/config', (req, res) => {
+  try {
+    const current = loadConfig();
+    const updated = { ...current, ...req.body };
+    saveConfig(updated);
+    broadcast({ type: 'config:update', config: updated });
+    res.json({ ok: true, config: updated });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** Lanzar orquestación */
 app.post('/api/orchestrate', async (req, res) => {
   const { task } = req.body;
 
@@ -121,25 +173,34 @@ app.post('/api/orchestrate', async (req, res) => {
     return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
   }
 
-  resetSession(task);
-  res.json({ ok: true, sessionId: currentOrchestrator?.sessionId });
+  const cfg = loadConfig();
+  const project = getActiveProject(cfg);
+
+  if (!project) {
+    return res.status(400).json({
+      error: 'No project configured. Edit orchestrator.config.json and set at least one project with a valid path.',
+    });
+  }
+
+  const projectPath      = project.path;
+  const additionalPaths  = project.additionalPaths ?? [];
+  resetSession(task, projectPath, additionalPaths);
+
+  const sessionId = `ses_${Date.now()}`;
+  res.json({ ok: true, sessionId, projectPath, additionalPaths });
 
   // Ejecutar en background
   (async () => {
-    currentOrchestrator = new Orchestrator();
+    currentOrchestrator = new Orchestrator({ cwd: projectPath, additionalPaths, config: cfg });
 
-    // Conectar eventos del orquestador → SSE + estado local
     currentOrchestrator.on('event', (event) => {
       pushLog(event);
-
-      // Actualizar estado local según tipo de evento
       if (event.type === 'agent:start')    sessionState.agents[event.agent] = 'running';
       if (event.type === 'agent:complete') sessionState.agents[event.agent] = 'complete';
       if (event.type === 'agent:fail')     sessionState.agents[event.agent] = 'fail';
       if (event.type === 'gate:pass')      sessionState.gates[event.gate]   = 'pass';
       if (event.type === 'gate:fail')      sessionState.gates[event.gate]   = 'fail';
       if (event.type === 'checkpoint')     broadcast({ type: 'checkpoints:update' });
-
       broadcast(event);
     });
 
@@ -158,19 +219,15 @@ app.post('/api/orchestrate', async (req, res) => {
   })();
 });
 
-/** Estado actual de la sesión */
+/** Estado actual */
 app.get('/api/status', (_req, res) => {
-  res.json({
-    ...sessionState,
-    logs: sessionState.logs.slice(-50), // últimas 50 para el endpoint
-  });
+  res.json({ ...sessionState, logs: sessionState.logs.slice(-50) });
 });
 
 /** Listar checkpoints */
 app.get('/api/checkpoints', (_req, res) => {
   try {
-    const manager = new CheckpointManager();
-    res.json(manager.list());
+    res.json(new CheckpointManager().list());
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -180,8 +237,7 @@ app.get('/api/checkpoints', (_req, res) => {
 app.post('/api/checkpoint', async (req, res) => {
   const { label = 'manual' } = req.body;
   try {
-    const manager = new CheckpointManager();
-    const id = await manager.save({
+    const id = await new CheckpointManager().save({
       label,
       taskTree: currentOrchestrator?.taskTree || {},
       handoffHistory: currentOrchestrator?.handoffHistory || [],
@@ -194,7 +250,7 @@ app.post('/api/checkpoint', async (req, res) => {
   }
 });
 
-/** Rollback a un checkpoint */
+/** Rollback */
 app.post('/api/rollback', (req, res) => {
   const { id } = req.body;
   if (!id) return res.status(400).json({ error: 'id is required' });
@@ -202,8 +258,7 @@ app.post('/api/rollback', (req, res) => {
     return res.status(409).json({ error: 'Cannot rollback while orchestration is running' });
   }
   try {
-    const manager = new CheckpointManager();
-    const cp = manager.restore(id);
+    const cp = new CheckpointManager().restore(id);
     sessionState.status = 'idle';
     broadcast({ type: 'rollback', message: `Rolled back to: ${cp.label} (${cp.timestamp})`, checkpoint: cp });
     res.json({ ok: true, checkpoint: cp });
@@ -215,7 +270,16 @@ app.post('/api/rollback', (req, res) => {
 // ── Start ─────────────────────────────────────────────────────────────────────
 const server = createServer(app);
 server.listen(PORT, () => {
+  const cfg = loadConfig();
+  const project = getActiveProject(cfg);
+
   logger.info({ port: PORT }, 'Dashboard server running');
   console.log(`\n  🤖 Claude Orchestrator Dashboard`);
-  console.log(`  ➜  http://localhost:${PORT}\n`);
+  console.log(`  ➜  http://localhost:${PORT}`);
+  if (project) {
+    console.log(`  📁 Project: ${project.name} → ${project.path}`);
+  } else {
+    console.log(`  ⚠️  No project configured — edit orchestrator.config.json`);
+  }
+  console.log();
 });

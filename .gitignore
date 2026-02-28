@@ -1,3 +1,6 @@
+# Project config (paths are local to each machine)
+orchestrator.config.json
+
 # Dependencies
 node_modules/
 

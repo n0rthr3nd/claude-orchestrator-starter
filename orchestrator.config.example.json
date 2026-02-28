@@ -1,0 +1,24 @@
+{
+  "projects": [
+    {
+      "name": "Full Stack App",
+      "path": "/absolute/path/to/backend",
+      "additionalPaths": [
+        "/absolute/path/to/frontend",
+        "/absolute/path/to/shared-types"
+      ],
+      "description": "API + React frontend + shared types"
+    },
+    {
+      "name": "Monorepo",
+      "path": "/absolute/path/to/monorepo",
+      "additionalPaths": [],
+      "description": "Single root, no extra dirs needed"
+    }
+  ],
+  "activeProject": 0,
+  "defaultModel": "claude-sonnet-4-6",
+  "orchestratorModel": "claude-opus-4-6",
+  "maxParallelAgents": 3,
+  "confidenceThreshold": 80
+}

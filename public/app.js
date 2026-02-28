@@ -36,22 +36,29 @@ let state = {
   sessionId: null,
 };
 
+let config = { projects: [], activeProject: 0 };
+
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
-const log          = $('log');
-const agentsList   = $('agents-list');
-const gatesList    = $('gates-list');
-const cpList       = $('checkpoints-list');
-const statusBadge  = $('status-badge');
-const sessionLabel = $('session-id');
-const connDot      = $('conn-dot');
-const btnOrch      = $('btn-orchestrate');
-const btnCp        = $('btn-checkpoint');
-const taskInput    = $('task-input');
+const log           = $('log');
+const agentsList    = $('agents-list');
+const gatesList     = $('gates-list');
+const cpList        = $('checkpoints-list');
+const statusBadge   = $('status-badge');
+const sessionLabel  = $('session-id');
+const connDot       = $('conn-dot');
+const btnOrch       = $('btn-orchestrate');
+const btnCp         = $('btn-checkpoint');
+const taskInput     = $('task-input');
+const projectSelect = $('project-select');
+const dirTree       = $('dir-tree');
+const configModal   = $('config-modal');
+const configEditor  = $('config-editor');
 
 // ── Initial render ────────────────────────────────────────────────────────────
 renderAgents();
 renderGates();
+loadConfig();
 
 // ── SSE connection ────────────────────────────────────────────────────────────
 let es;
@@ -81,36 +88,29 @@ connectSSE();
 function handleEvent(event) {
   const { type } = event;
 
-  // Full state sync (sent on connect)
   if (type === 'sync') {
     state = { ...state, ...event.state };
     renderAll();
-    // Replay logs
     log.innerHTML = '';
     (event.state.logs || []).forEach(addLogEntry);
     return;
   }
 
-  if (type === 'checkpoints:update') {
-    loadCheckpoints();
-    return;
-  }
+  if (type === 'checkpoints:update') { loadCheckpoints(); return; }
+  if (type === 'config:update')      { config = event.config; renderProjectSelector(); return; }
 
-  // Update state
   if (type === 'orchestration:start') {
     state.status = 'running';
     state.agents = {};
     state.gates  = Object.fromEntries(GATES.map(g => [g, 'pending']));
-    log.innerHTML = ''; // fresh log for new run
+    log.innerHTML = '';
   }
   if (type === 'orchestration:complete') {
     state.status = 'complete';
     state.metrics = event.result?.metrics || {};
     loadCheckpoints();
   }
-  if (type === 'orchestration:error') {
-    state.status = 'error';
-  }
+  if (type === 'orchestration:error') state.status = 'error';
   if (type === 'agent:start')    state.agents[event.agent] = 'running';
   if (type === 'agent:complete') state.agents[event.agent] = 'complete';
   if (type === 'agent:fail')     state.agents[event.agent] = 'fail';
@@ -118,15 +118,163 @@ function handleEvent(event) {
   if (type === 'gate:fail')      state.gates[event.gate]   = 'fail';
   if (type === 'checkpoint')     loadCheckpoints();
 
-  // Add log line
   if (event.message) addLogEntry(event);
 
-  // Re-render reactive parts
   renderStatus();
   renderAgents();
   renderGates();
   renderMetrics();
 }
+
+// ── Config & project selector ─────────────────────────────────────────────────
+async function loadConfig() {
+  try {
+    const res = await fetch('/api/config');
+    if (!res.ok) return;
+    config = await res.json();
+    renderProjectSelector();
+  } catch { /* server not ready yet */ }
+}
+
+function renderProjectSelector() {
+  projectSelect.innerHTML = '';
+
+  if (!config.projects?.length) {
+    projectSelect.innerHTML = '<option value="">— no projects configured —</option>';
+    dirTree.innerHTML = '<div class="dir-empty">Edit orchestrator.config.json to add a project</div>';
+    return;
+  }
+
+  config.projects.forEach((p, i) => {
+    const opt = document.createElement('option');
+    opt.value = i;
+    opt.textContent = p.name || p.path;
+    if (i === (config.activeProject ?? 0)) opt.selected = true;
+    projectSelect.appendChild(opt);
+  });
+
+  renderDirTree();
+}
+
+function renderDirTree() {
+  const idx = parseInt(projectSelect.value, 10);
+  const p   = config.projects?.[idx];
+  if (!p) { dirTree.innerHTML = ''; return; }
+
+  const additional = p.additionalPaths ?? [];
+
+  let html = `
+    <div class="dir-entry root" title="${escapeHtml(p.path)}">
+      <span class="dir-icon">📁</span>
+      <span class="dir-label">${escapeHtml(p.path)}</span>
+      <span class="dir-badge">root</span>
+    </div>`;
+
+  additional.forEach((ap, i) => {
+    html += `
+    <div class="dir-entry extra" title="${escapeHtml(ap)}">
+      <span class="dir-icon">📂</span>
+      <span class="dir-label">${escapeHtml(ap)}</span>
+      <button class="dir-remove" onclick="removeAdditionalPath(${idx}, ${i})" title="Remove">✕</button>
+    </div>`;
+  });
+
+  html += `
+    <button class="dir-add-btn" onclick="promptAddPath(${idx})">+ add directory</button>`;
+
+  if (p.description) {
+    html = `<div class="dir-desc">${escapeHtml(p.description)}</div>` + html;
+  }
+
+  dirTree.innerHTML = html;
+}
+
+async function promptAddPath(projectIdx) {
+  const newPath = prompt('Enter the absolute path to add:')?.trim();
+  if (!newPath) return;
+
+  const project = config.projects[projectIdx];
+  const additional = [...(project.additionalPaths ?? []), newPath];
+
+  await patchProjectConfig(projectIdx, { additionalPaths: additional });
+}
+
+async function removeAdditionalPath(projectIdx, pathIdx) {
+  const project = config.projects[projectIdx];
+  const additional = (project.additionalPaths ?? []).filter((_, i) => i !== pathIdx);
+
+  await patchProjectConfig(projectIdx, { additionalPaths: additional });
+}
+
+async function patchProjectConfig(projectIdx, patch) {
+  const updatedProjects = config.projects.map((p, i) =>
+    i === projectIdx ? { ...p, ...patch } : p
+  );
+  const res = await fetch('/api/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projects: updatedProjects }),
+  });
+  if (res.ok) {
+    config = (await res.json()).config;
+    renderDirTree();
+  }
+}
+
+projectSelect.addEventListener('change', async () => {
+  const idx = parseInt(projectSelect.value, 10);
+  renderDirTree();
+  await fetch('/api/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ activeProject: idx }),
+  });
+});
+
+// ── Config modal ──────────────────────────────────────────────────────────────
+$('btn-edit-config').addEventListener('click', async () => {
+  const res = await fetch('/api/config');
+  const cfg = await res.json();
+  configEditor.value = JSON.stringify(cfg, null, 2);
+  configModal.classList.remove('hidden');
+});
+
+$('btn-close-modal').addEventListener('click', () => {
+  configModal.classList.add('hidden');
+});
+
+configModal.addEventListener('click', (e) => {
+  if (e.target === configModal) configModal.classList.add('hidden');
+});
+
+$('btn-reload-config').addEventListener('click', async () => {
+  await loadConfig();
+  const res = await fetch('/api/config');
+  configEditor.value = JSON.stringify(await res.json(), null, 2);
+});
+
+$('btn-save-config').addEventListener('click', async () => {
+  let parsed;
+  try {
+    parsed = JSON.parse(configEditor.value);
+  } catch (e) {
+    alert(`Invalid JSON: ${e.message}`);
+    return;
+  }
+  const res = await fetch('/api/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(parsed),
+  });
+  if (res.ok) {
+    config = (await res.json()).config;
+    renderProjectSelector();
+    configModal.classList.add('hidden');
+  } else {
+    const err = await res.json();
+    alert(`Save failed: ${err.error}`);
+  }
+});
 
 // ── Render helpers ────────────────────────────────────────────────────────────
 function renderAll() {
@@ -178,7 +326,6 @@ function renderMetrics() {
 
 // ── Log ───────────────────────────────────────────────────────────────────────
 function addLogEntry(event) {
-  // Remove empty-state placeholder
   const placeholder = log.querySelector('.log-empty');
   if (placeholder) placeholder.remove();
 
@@ -186,7 +333,6 @@ function addLogEntry(event) {
   const icon = EVENT_ICONS[event.type] || '·';
 
   const div = document.createElement('div');
-  // Escape backslashes in class name for CSS selector safety (done in CSS with \\:)
   div.className = `log-entry ${event.type}`;
   div.innerHTML = `
     <span class="log-ts">${ts}</span>
@@ -258,6 +404,13 @@ btnOrch.addEventListener('click', async () => {
   const task = taskInput.value.trim();
   if (!task) { taskInput.focus(); return; }
 
+  const idx = parseInt(projectSelect.value, 10);
+  const project = config.projects?.[idx];
+  if (!project) {
+    alert('No project selected.\n\nClick ✎ to configure a project path first.');
+    return;
+  }
+
   btnOrch.disabled = true;
 
   const res = await fetch('/api/orchestrate', {
@@ -289,10 +442,8 @@ btnCp.addEventListener('click', async () => {
   if (!res.ok) alert(`Failed: ${data.error}`);
 });
 
-// Allow Ctrl+Enter to submit from textarea
 taskInput.addEventListener('keydown', e => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) btnOrch.click();
 });
 
-// Load initial checkpoint list
 loadCheckpoints();
