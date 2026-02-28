@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Claude Orchestrator</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div id="app">
+
+  <!-- ── Header ───────────────────────────────────────────────── -->
+  <header>
+    <span class="logo">🤖</span>
+    <h1>Claude Orchestrator</h1>
+    <div id="conn-dot" title="SSE connection"></div>
+    <span id="session-id">—</span>
+    <span id="status-badge" class="idle">Idle</span>
+  </header>
+
+  <!-- ── Left: Task input + agents ────────────────────────────── -->
+  <aside class="panel" id="panel-left">
+    <div class="panel-title">New Task</div>
+
+    <div class="task-section">
+      <textarea
+        id="task-input"
+        placeholder="Describe your task…&#10;e.g. Add JWT authentication to the REST API"
+      ></textarea>
+      <button class="btn btn-primary" id="btn-orchestrate">
+        ▶ Orchestrate
+      </button>
+      <button class="btn btn-secondary" id="btn-checkpoint">
+        📸 Checkpoint
+      </button>
+    </div>
+
+    <div class="panel-title">Agents</div>
+    <div class="agents-section">
+      <div id="agents-list">
+        <!-- populated by JS -->
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── Center: Live log ──────────────────────────────────────── -->
+  <main class="panel" id="panel-center">
+    <div class="panel-title">Live Log</div>
+    <div id="log">
+      <p class="log-empty">No activity yet. Submit a task to begin.</p>
+    </div>
+    <div id="metrics-bar">
+      <span>Agents: <b id="m-agents">0</b></span>
+      <span>Succeeded: <b id="m-ok">0</b></span>
+      <span>Failed: <b id="m-fail">0</b></span>
+      <span>Gates passed: <b id="m-gates">0</b></span>
+      <span>Checkpoints: <b id="m-cps">0</b></span>
+    </div>
+  </main>
+
+  <!-- ── Right: Quality gates + checkpoints ───────────────────── -->
+  <aside class="panel" id="panel-right">
+    <div class="panel-title">Quality Gates</div>
+    <div class="gates-section">
+      <div id="gates-list">
+        <!-- populated by JS -->
+      </div>
+    </div>
+
+    <div class="panel-title" style="margin-top:4px">Checkpoints</div>
+    <div class="checkpoints-section">
+      <div id="checkpoints-list">
+        <p class="cp-empty">No checkpoints yet.</p>
+      </div>
+    </div>
+  </aside>
+
+</div>
+<script src="app.js"></script>
+</body>
+</html>
